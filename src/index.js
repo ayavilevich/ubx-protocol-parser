@@ -55,6 +55,7 @@ export default class UBXProtocolParser extends Transform {
     this.packetState = 0;
   }
 
+  // eslint-disable-next-line no-underscore-dangle
   _transform(chunk, encoding, cb) {
     const data = Buffer.concat([this.buffer, chunk]);
     let checksum;
@@ -129,6 +130,8 @@ export default class UBXProtocolParser extends Transform {
               });
             } else {
               debug(`Checksum "${checksum}" doesn't match received CheckSum "${this.packet.checksum}"`);
+              // emit an event about the failed checksum
+              this.emit('failed_checksum', { packet: this.packet, checksum });
             }
 
             this.resetState();
@@ -156,6 +159,7 @@ export default class UBXProtocolParser extends Transform {
     this.buffer = Buffer.alloc(0);
   }
 
+  // eslint-disable-next-line no-underscore-dangle
   _flush(cb) {
     this.resetState();
     cb();
