@@ -48,26 +48,31 @@ export default class UBXProtocolParser extends Transform {
       objectMode: true,
     });
 
-    this.buffer = Buffer.alloc(0);
+    // this.buffer = Buffer.alloc(0); // this seems unnecessary and incorrect
     this.packet = { ...packetTemplate };
     this.payloadPosition = 0;
     this.packetStartFound = false;
-    this.packetState = 0;
+    this.packetState = PACKET_SYNC_1;
+    this.streamIndex = 0;
   }
 
   // eslint-disable-next-line no-underscore-dangle
   _transform(chunk, encoding, cb) {
-    const data = Buffer.concat([this.buffer, chunk]);
-    let checksum;
+    // const data = Buffer.concat([this.buffer, chunk]);
+    const data = chunk;
 
     for (const [i, byte] of data.entries()) {
+      debug(`Incoming byte "${byte}", 0x${byte.toString(16)} received at state "${this.packetState},${this.packetStartFound}"`);
+      debug(`payload.len: ${this.packet.length}, payloadPosition: ${this.payloadPosition}, streamIndex: ${this.streamIndex}`);
       if (this.packetStartFound) {
         switch (this.packetState) {
           case PACKET_SYNC_1:
             if (byte === 0x62) {
               this.packetState = PACKET_SYNC_2;
+            } else if (byte === 0xB5) { // 0xB5 after another 0xB5 (happens in the stream)
+              // remain in same state
             } else {
-              debug(`Unknown byte "${byte}" received at state "${this.packetState}"`);
+              debug(`Unknown byte "${byte}", 0x${byte.toString(16)} received at state "${this.packetState},${this.packetStartFound}"`);
               this.resetState();
             }
             break;
@@ -89,7 +94,14 @@ export default class UBXProtocolParser extends Transform {
 
           case PACKET_LENGTH:
             this.packet.length = this.packet.length + byte * 2 ** 8;
-            this.packetState = PACKET_LENGTH_2;
+            // verify length for class/id
+            // branch next
+            if (this.packet.length > 0) {
+              this.packetState = PACKET_LENGTH_2;
+            } else {
+              this.packetState = PACKET_PAYLOAD; // go straight to checksum
+              this.packet.payload = Buffer.alloc(0);
+            }
             break;
 
           case PACKET_LENGTH_2:
@@ -112,10 +124,10 @@ export default class UBXProtocolParser extends Transform {
             this.packetState = PACKET_CHECKSUM;
             break;
 
-          case PACKET_CHECKSUM:
+          case PACKET_CHECKSUM: {
             this.packet.checksum = this.packet.checksum + byte * 2 ** 8;
 
-            checksum = calcCheckSum(
+            const checksum = calcCheckSum(
               this.packet.class,
               this.packet.id,
               this.packet.length,
@@ -123,11 +135,15 @@ export default class UBXProtocolParser extends Transform {
             );
 
             if (checksum === this.packet.checksum) {
-              this.push({
-                messageClass: this.packet.class,
-                messageId: this.packet.id,
-                payload: this.packet.payload,
-              });
+              if (this.packet.length > 0) { // if not polling but actual data
+                this.push({
+                  messageClass: this.packet.class,
+                  messageId: this.packet.id,
+                  payload: this.packet.payload,
+                });
+              } else {
+                this.emit('polling_message', { packet: this.packet });
+              }
             } else {
               debug(`Checksum "${checksum}" doesn't match received CheckSum "${this.packet.checksum}"`);
               // emit an event about the failed checksum
@@ -135,8 +151,9 @@ export default class UBXProtocolParser extends Transform {
             }
 
             this.resetState();
-            this.buffer = data.slice(i + 1);
+            // this.buffer = data.slice(i + 1);
             break;
+          }
           default:
             debug(`Should never reach this packetState "${this.packetState}`);
         }
@@ -144,19 +161,20 @@ export default class UBXProtocolParser extends Transform {
         this.packetStartFound = true;
         this.packetState = PACKET_SYNC_1;
       } else {
-        debug(`Unknown byte "${byte}" received at state "${this.packetState}"`);
+        debug(`Unknown byte "${byte}", 0x${byte.toString(16)} received at state "${this.packetState},${this.packetStartFound}"`);
       }
+      this.streamIndex += 1;
     }
 
     cb();
   }
 
   resetState() {
-    this.packetState = 0;
+    this.packetState = PACKET_SYNC_1;
     this.packet = { ...packetTemplate };
     this.payloadPosition = 0;
     this.packetStartFound = false;
-    this.buffer = Buffer.alloc(0);
+    // this.buffer = Buffer.alloc(0);
   }
 
   // eslint-disable-next-line no-underscore-dangle
