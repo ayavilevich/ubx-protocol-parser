@@ -3,6 +3,7 @@
 /* eslint no-restricted-syntax: "off" */
 import Debug from 'debug';
 import { Transform } from 'stream';
+import { packetClassIdToLength } from './ubx';
 
 const debug = Debug('ubx:protocol:parser');
 
@@ -14,6 +15,14 @@ const PACKET_LENGTH = 4;
 const PACKET_LENGTH_2 = 5;
 const PACKET_PAYLOAD = 6;
 const PACKET_CHECKSUM = 7;
+
+/*
+Limit max payload size to prevent a corrupt length from messing with data.
+In case of an invalid length, this state machine will not "go back" and data will be lost. In any case, a delay is not desired.
+Mind that some messages have variable length so set the max correctly depending on the messages you have enabled.
+You can override the default using options.maxPacketPayloadLength
+*/
+const DEFAULT_MAX_PACKET_PAYLOAD_LENGTH = 300; // cap max packet size, proper max will depend on the type of messages the ubx is sending
 
 const packetTemplate = {
   class: 0,
@@ -54,6 +63,8 @@ export default class UBXProtocolParser extends Transform {
     this.packetStartFound = false;
     this.packetState = PACKET_SYNC_1;
     this.streamIndex = 0;
+    // max payload size to allow. pass 0 to disable this check.
+    this.maxPacketPayloadLength = typeof options === 'object' && typeof options.maxPacketPayloadLength === 'number' ? options.maxPacketPayloadLength : DEFAULT_MAX_PACKET_PAYLOAD_LENGTH;
   }
 
   // eslint-disable-next-line no-underscore-dangle
@@ -62,8 +73,8 @@ export default class UBXProtocolParser extends Transform {
     const data = chunk;
 
     for (const [i, byte] of data.entries()) {
-      debug(`Incoming byte "${byte}", 0x${byte.toString(16)} received at state "${this.packetState},${this.packetStartFound}"`);
-      debug(`payload.len: ${this.packet.length}, payloadPosition: ${this.payloadPosition}, streamIndex: ${this.streamIndex}`);
+      // debug(`Incoming byte "${byte}", 0x${byte.toString(16)} received at state "${this.packetState},${this.packetStartFound}"`);
+      // debug(`payload.len: ${this.packet.length}, payloadPosition: ${this.payloadPosition}, streamIndex: ${this.streamIndex}`);
       if (this.packetStartFound) {
         switch (this.packetState) {
           case PACKET_SYNC_1:
@@ -92,18 +103,26 @@ export default class UBXProtocolParser extends Transform {
             this.packetState = PACKET_LENGTH;
             break;
 
-          case PACKET_LENGTH:
+          case PACKET_LENGTH: {
             this.packet.length = this.packet.length + byte * 2 ** 8;
             // verify length for class/id
-            // branch next
-            if (this.packet.length > 0) {
-              this.packetState = PACKET_LENGTH_2;
-            } else {
-              this.packetState = PACKET_PAYLOAD; // go straight to checksum
+            const packetType = `${this.packet.class}_${this.packet.id}`;
+            if (this.maxPacketPayloadLength && this.packet.length > this.maxPacketPayloadLength) {
+              debug(`Payload length ${this.packet.length} larger than allowed max length ${this.maxPacketPayloadLength}`);
+              this.emit('payload_too_large', { packet: this.packet, maxPacketPayloadLength: this.maxPacketPayloadLength });
+              this.resetState();
+            } else if (this.packet.length === 0) { // poll packet
+              this.packetState = PACKET_PAYLOAD; // packet with no payload, go straight to checksum state
               this.packet.payload = Buffer.alloc(0);
+            } else if (typeof packetClassIdToLength[packetType] === 'number' && this.packet.length !== packetClassIdToLength[packetType]) {
+              debug(`Payload length ${this.packet.length} wrong for packet class/id ${packetClassIdToLength[packetType]}, ${packetType}`);
+              this.emit('wrong_payload_length', { packet: this.packet, expectedPayloadLength: packetClassIdToLength[packetType] });
+              this.resetState();
+            } else { // normal case
+              this.packetState = PACKET_LENGTH_2;
             }
             break;
-
+          }
           case PACKET_LENGTH_2:
             if (this.packet.payload === null) {
               this.packet.payload = Buffer.alloc(this.packet.length);
