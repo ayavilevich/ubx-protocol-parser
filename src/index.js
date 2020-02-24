@@ -57,7 +57,6 @@ export default class UBXProtocolParser extends Transform {
       objectMode: true,
     });
 
-    // this.buffer = Buffer.alloc(0); // this seems unnecessary and incorrect
     this.packet = { ...packetTemplate };
     this.payloadPosition = 0;
     this.packetStartFound = false;
@@ -72,7 +71,7 @@ export default class UBXProtocolParser extends Transform {
     // init working buffer and pointer
     let data = chunk;
     let i = 0;
-    // loop of data, note we can back track
+    // loop on data, note we can back track
     while (i < data.length) {
       const byte = data[i];
       // debug(`Incoming byte "${byte}", 0x${byte.toString(16)} received at state "${this.packetState},${this.packetStartFound}"`);
@@ -172,7 +171,7 @@ export default class UBXProtocolParser extends Transform {
               // emit an event about the failed checksum
               this.emit('failed_checksum', { packet: this.packet, checksum });
               // back track on data to after last sync point (which was not good)
-              // if we don't roll back and just continue here then we will loose ~payload.length of data which might have new packets
+              // if we don't back track and just continue here then we will loose ~payload.length of data which might have new packets
               const headerBuffer = Buffer.alloc(4); // reconstruct, this doesn't have to be part of the current "chunk", could have been processed in previous calls
               headerBuffer.writeUInt8(this.packet.class, 0);
               headerBuffer.writeUInt8(this.packet.id, 1);
@@ -207,7 +206,6 @@ export default class UBXProtocolParser extends Transform {
     this.packet = { ...packetTemplate };
     this.payloadPosition = 0;
     this.packetStartFound = false;
-    // this.buffer = Buffer.alloc(0);
   }
 
   // eslint-disable-next-line no-underscore-dangle
