@@ -69,10 +69,12 @@ export default class UBXProtocolParser extends Transform {
 
   // eslint-disable-next-line no-underscore-dangle
   _transform(chunk, encoding, cb) {
-    // const data = Buffer.concat([this.buffer, chunk]);
-    const data = chunk;
-
-    for (const [i, byte] of data.entries()) {
+    // init working buffer and pointer
+    let data = chunk;
+    let i = 0;
+    // loop of data, note we can back track
+    while (i < data.length) {
+      const byte = data[i];
       // debug(`Incoming byte "${byte}", 0x${byte.toString(16)} received at state "${this.packetState},${this.packetStartFound}"`);
       // debug(`payload.len: ${this.packet.length}, payloadPosition: ${this.payloadPosition}, streamIndex: ${this.streamIndex}`);
       if (this.packetStartFound) {
@@ -99,12 +101,13 @@ export default class UBXProtocolParser extends Transform {
             break;
 
           case PACKET_ID:
-            this.packet.length = byte;
+            this.packet.length1 = byte;
             this.packetState = PACKET_LENGTH;
             break;
 
-          case PACKET_LENGTH: {
-            this.packet.length = this.packet.length + byte * 2 ** 8;
+          case PACKET_LENGTH: { // got one length byte, next one to follow
+            this.packet.length2 = byte;
+            this.packet.length = this.packet.length1 + this.packet.length2 * 2 ** 8;
             // verify length for class/id
             const packetType = `${this.packet.class}_${this.packet.id}`;
             if (this.maxPacketPayloadLength && this.packet.length > this.maxPacketPayloadLength) {
@@ -133,18 +136,19 @@ export default class UBXProtocolParser extends Transform {
             this.payloadPosition += 1;
 
             if (this.payloadPosition >= this.packet.length) {
-              this.packetState = PACKET_PAYLOAD;
+              this.packetState = PACKET_PAYLOAD; // go to next state
             }
 
             break;
 
-          case PACKET_PAYLOAD:
-            this.packet.checksum = byte;
+          case PACKET_PAYLOAD: // done with payload
+            this.packet.checksum1 = byte;
             this.packetState = PACKET_CHECKSUM;
             break;
 
           case PACKET_CHECKSUM: {
-            this.packet.checksum = this.packet.checksum + byte * 2 ** 8;
+            this.packet.checksum2 = byte;
+            this.packet.checksum = this.packet.checksum1 + this.packet.checksum2 * 2 ** 8;
 
             const checksum = calcCheckSum(
               this.packet.class,
@@ -167,10 +171,18 @@ export default class UBXProtocolParser extends Transform {
               debug(`Checksum "${checksum}" doesn't match received CheckSum "${this.packet.checksum}"`);
               // emit an event about the failed checksum
               this.emit('failed_checksum', { packet: this.packet, checksum });
+              // back track on data to after last sync point (which was not good)
+              // if we don't roll back and just continue here then we will loose ~payload.length of data which might have new packets
+              const headerBuffer = Buffer.alloc(4); // reconstruct, this doesn't have to be part of the current "chunk", could have been processed in previous calls
+              headerBuffer.writeUInt8(this.packet.class, 0);
+              headerBuffer.writeUInt8(this.packet.id, 1);
+              headerBuffer.writeUInt16LE(this.packet.payload.length, 2);
+              data = Buffer.concat([headerBuffer, this.packet.payload, new Uint8Array([this.packet.checksum1, this.packet.checksum2]), data.slice(i + 1)]);
+              i = -1; // will be advanced to 0 (next read pos) on loop end
+              this.streamIndex -= headerBuffer.length + this.packet.payload.length + 2;
             }
 
             this.resetState();
-            // this.buffer = data.slice(i + 1);
             break;
           }
           default:
@@ -182,7 +194,9 @@ export default class UBXProtocolParser extends Transform {
       } else {
         debug(`Unknown byte "${byte}", 0x${byte.toString(16)} received at state "${this.packetState},${this.packetStartFound}"`);
       }
+      // advance to next byte
       this.streamIndex += 1;
+      i += 1;
     }
 
     cb();
