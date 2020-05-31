@@ -2,6 +2,7 @@
 Most fixed length payloads are below 100bytes.
 Define here any packets with known and fixed payload length so we can use this for verification.
 Otherwise, a corrupt input stream can feed an invalid and large payload size and will cause data loss the size of the invalid length.
+A two number array means a valid packet length of i0 + i1 * N for any N.
 A value of 'false' means that the packet has a variable length payload.
 */
 export const packetClassIdToLength = {
@@ -106,7 +107,8 @@ export const packetClassIdToLength = {
   '1_7': 92, // 'NAV-PVT',
   '1_60': 64, // 'NAV-RELPOSNED',
   '1_16': 0, // 'NAV-RESETODO',
-  '1_53': false, // 'NAV-SAT',
+  '1_53': [8, 12], // 'NAV-SAT',
+  '1_67': [8, 16], // 'NAV-SIG',
   // '1_50': 'NAV-SBAS',
   // '1_6': 'NAV-SOL',
   '1_3': 16, // 'NAV-STATUS',

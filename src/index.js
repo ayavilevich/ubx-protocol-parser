@@ -120,6 +120,10 @@ export default class UBXProtocolParser extends Transform {
               debug(`Payload length ${this.packet.length} wrong for packet class/id ${packetClassIdToLength[packetType]}, ${packetType}`);
               this.emit('wrong_payload_length', { packet: this.packet, expectedPayloadLength: packetClassIdToLength[packetType] });
               this.resetState();
+            } else if (Array.isArray(packetClassIdToLength[packetType]) && (this.packet.length - packetClassIdToLength[packetType][0]) % packetClassIdToLength[packetType][1] !== 0) {
+              debug(`Payload length ${this.packet.length} wrong for packet class/id ${packetClassIdToLength[packetType]}, ${packetType}`);
+              this.emit('wrong_payload_length', { packet: this.packet, expectedPayloadLength: packetClassIdToLength[packetType] });
+              this.resetState();
             } else { // normal case
               this.packetState = PACKET_LENGTH_2;
             }
